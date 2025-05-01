@@ -17,14 +17,20 @@ if api_token and user_text.strip():
     # Entity Extraction
     st.header("🧠 Entity Extraction")
     try:
-        nex_result = datatxt.nex(user_text, include="types")
+        nex_result = datatxt.nex(user_text, include="types,uri")
         entities = [ann.label for ann in nex_result.annotations]
 
         if entities:
             st.success(f"✅ Found {len(entities)} Entities:")
-            st.markdown("### 🏷 Entities Detected:")
+            st.markdown("### 🏷 Entities Detected with Citations:")
             for ann in nex_result.annotations:
-                st.markdown(f"- **{ann.label}** ({ann.types[0].split('/')[-1] if ann.types else 'N/A'})")
+                label = ann.label
+                entity_type = ann.types[0].split("/")[-1] if ann.types else "N/A"
+                uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
+                if uri:
+                    st.markdown(f"- **[{label}]({uri})** ({entity_type})")
+                else:
+                    st.markdown(f"- **{label}** ({entity_type})")
         else:
             st.warning("No entities found.")
     except Exception as e:
@@ -48,41 +54,65 @@ if api_token and user_text.strip():
     if ref_text.strip():
         st.header("📎 Competitor Analysis: Entity Comparison")
         try:
-            comp_entities = datatxt.nex(ref_text, include="types")
-            user_entity_labels = {ann.label.lower() for ann in nex_result.annotations}
-            comp_entity_labels = {ann.label.lower() for ann in comp_entities.annotations}
+            comp_result = datatxt.nex(ref_text, include="types,uri")
+            user_entity_map = {ann.label.lower(): ann for ann in nex_result.annotations}
+            comp_entity_map = {ann.label.lower(): ann for ann in comp_result.annotations}
 
-            missing_entities = comp_entity_labels - user_entity_labels
-            common_entities = user_entity_labels & comp_entity_labels
-            unique_entities = user_entity_labels - comp_entity_labels
+            user_labels = set(user_entity_map.keys())
+            comp_labels = set(comp_entity_map.keys())
 
-            if missing_entities:
+            missing = comp_labels - user_labels
+            unique = user_labels - comp_labels
+            common = user_labels & comp_labels
+
+            if missing:
                 st.warning("📌 Entities your content is **missing** (used by competitor):")
-                for ent in sorted(missing_entities):
-                    st.markdown(f"- ❗ `{ent}`")
+                for label in sorted(missing):
+                    ann = comp_entity_map[label]
+                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
+                    if uri:
+                        st.markdown(f"- ❗ **[{label.title()}]({uri})**")
+                    else:
+                        st.markdown(f"- ❗ `{label.title()}`")
 
-            if unique_entities:
+            if unique:
                 st.info("🌿 Entities unique to **your content** (not used by competitor):")
-                for ent in sorted(unique_entities):
-                    st.markdown(f"- ✅ `{ent}`")
+                for label in sorted(unique):
+                    ann = user_entity_map[label]
+                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
+                    if uri:
+                        st.markdown(f"- ✅ **[{label.title()}]({uri})**")
+                    else:
+                        st.markdown(f"- ✅ `{label.title()}`")
 
-            if common_entities:
+            if common:
                 st.success("🎯 Entities common in both contents:")
-                for ent in sorted(common_entities):
-                    st.markdown(f"- 🔁 `{ent}`")
+                for label in sorted(common):
+                    ann = user_entity_map[label]
+                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
+                    if uri:
+                        st.markdown(f"- 🔁 **[{label.title()}]({uri})**")
+                    else:
+                        st.markdown(f"- 🔁 `{label.title()}`")
 
             # SEO Recommendations
             st.header("📈 Top SEO Recommendations")
             recommendations = []
 
-            if missing_entities:
+            if missing:
+                top_missing = [f"[{comp_entity_map[l].label}]({comp_entity_map[l].uri})" 
+                               if hasattr(comp_entity_map[l], "uri") and comp_entity_map[l].uri 
+                               else f"`{comp_entity_map[l].label}`" for l in sorted(missing)[:5]]
                 recommendations.append(
-                    f"Consider including missing entities like **{', '.join(sorted(missing_entities)[:5])}** to align with competitor coverage."
+                    f"Consider including missing entities like {', '.join(top_missing)} to align with competitor coverage."
                 )
 
-            if unique_entities:
+            if unique:
+                top_unique = [f"[{user_entity_map[l].label}]({user_entity_map[l].uri})" 
+                              if hasattr(user_entity_map[l], "uri") and user_entity_map[l].uri 
+                              else f"`{user_entity_map[l].label}`" for l in sorted(unique)[:5]]
                 recommendations.append(
-                    f"Highlight unique entities such as **{', '.join(sorted(unique_entities)[:5])}** as differentiators."
+                    f"Highlight unique entities such as {', '.join(top_unique)} as differentiators."
                 )
 
             if score < 0:
