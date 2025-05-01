@@ -1,120 +1,102 @@
 import streamlit as st
 from dandelion import DataTXT
-from textblob import TextBlob
-import textstat
+import os
 
-# Streamlit layout
-st.set_page_config(page_title="SEO Content Analyzer", layout="centered")
-st.title("🔍 SEO Content Analyzer with NLP")
-st.write("Powered by **Dandelion.eu** + **TextBlob** + SEO heuristics.")
+# Setup
+st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
+st.title("🔍 SEO Entity & Sentiment Analyzer using Dandelion NLP")
 
-# API Token
-token = st.text_input("🔐 Dandelion API Token", type="password")
+# Input fields
+api_token = st.text_input("🔑 Enter your Dandelion API Token", type="password")
+user_text = st.text_area("✍️ Enter Your Content", height=200)
+ref_text = st.text_area("📄 (Optional) Enter Competitor Content for Comparison", height=200)
 
-if token:
-    datatxt = DataTXT(token=token)
+if api_token and user_text.strip():
+    datatxt = DataTXT(token=api_token, min_confidence=0.6)
 
-    # Input text
-    user_input = st.text_area("✏️ Enter the content to analyze:", height=250)
+    # Analyze Entities
+    st.header("🧠 Entity Extraction")
+    try:
+        nex_result = datatxt.nex(user_text, include="types")
+        entities = [ann.label for ann in nex_result.annotations]
 
-    # Optional comparison input
-    ref_text = st.text_area("📄 (Optional) Enter competitor/reference content to compare:", height=200)
+        if entities:
+            st.success(f"✅ Found {len(entities)} Entities:")
+            st.markdown("### 🏷 Entities Detected:")
+            for ann in nex_result.annotations:
+                st.markdown(f"- **{ann.label}** ({ann.types[0].split('/')[-1] if ann.types else 'N/A'})")
+        else:
+            st.warning("No entities found.")
 
-    # Keyword for density
-    keyword = st.text_input("🔑 Optional keyword to check density:")
+    except Exception as e:
+        st.error(f"Entity extraction error: {e}")
 
-    # Entity type filter
-    entity_type_filter = st.multiselect("📌 Filter entities by type (DBpedia)", ["Person", "Place", "Organization"])
+    # Analyze Sentiment
+    st.header("💬 Sentiment Analysis")
+    try:
+        sentiment_result = datatxt.sent(user_text)
+        score = sentiment_result.sentiment.get("score", 0)
+        sentiment_label = (
+            "Positive 😊" if score > 0 else "Negative 😠" if score < 0 else "Neutral 😐"
+        )
+        st.markdown(f"**Sentiment Score:** `{score:.3f}`")
+        st.markdown(f"**Interpretation:** {sentiment_label}")
 
-    if st.button("🚀 Run Analysis") and user_input:
-        with st.spinner("Analyzing..."):
+    except Exception as e:
+        st.error(f"Sentiment analysis error: {e}")
 
-            ## LANGUAGE DETECTION
-            lang_result = datatxt.li(user_input)
-            lang = lang_result.get("detectedLangs", [{}])[0].get("lang", "unknown")
-            st.success(f"Detected Language: `{lang}`")
+    # Competitor Entity Comparison
+    if ref_text.strip():
+        st.header("📎 Competitor Analysis: Entity Comparison")
+        try:
+            comp_entities = datatxt.nex(ref_text, include="types")
+            user_entity_labels = {ann.label.lower() for ann in nex_result.annotations}
+            comp_entity_labels = {ann.label.lower() for ann in comp_entities.annotations}
 
-            # 1. ENTITY EXTRACTION
-            st.subheader("📍 Entity Extraction")
-            try:
-                nex_result = datatxt.nex(user_input, include="types,abstract,categories")
-                filtered_entities = []
-                for ann in nex_result.annotations:
-                    # Extract type from DBpedia URI
-                    types = [t.split("/")[-1] for t in ann.types]
-                    if not entity_type_filter or any(t in types for t in entity_type_filter):
-                        filtered_entities.append((ann.label, types, ann.uri))
+            missing_entities = comp_entity_labels - user_entity_labels
+            common_entities = user_entity_labels & comp_entity_labels
+            unique_entities = user_entity_labels - comp_entity_labels
 
-                if filtered_entities:
-                    for label, types, uri in filtered_entities:
-                        st.markdown(f"- **{label}** ({', '.join(types)}) — [Link]({uri})")
-                else:
-                    st.info("No matching entities found.")
-            except Exception as e:
-                st.error(f"Entity extraction error: {e}")
+            if missing_entities:
+                st.warning("📌 Entities your content is **missing** (used by competitor):")
+                for ent in sorted(missing_entities):
+                    st.markdown(f"- ❗ `{ent}`")
 
-            # 2. SENTIMENT ANALYSIS BY PARAGRAPH
-            st.subheader("❤️ Sentiment Analysis by Section")
-            paras = user_input.split("\n")
-            sentiment_scores = []
+            if unique_entities:
+                st.info("🌿 Entities unique to **your content** (not used by competitor):")
+                for ent in sorted(unique_entities):
+                    st.markdown(f"- ✅ `{ent}`")
 
-            for para in paras:
-                if para.strip():
-                    blob = TextBlob(para)
-                    polarity = blob.sentiment.polarity
-                    sentiment_scores.append(polarity)
-                    st.write(f"**{para.strip()[:60]}...** → Sentiment: `{polarity:.2f}`")
+            if common_entities:
+                st.success("🎯 Entities common in both contents:")
+                for ent in sorted(common_entities):
+                    st.markdown(f"- 🔁 `{ent}`")
 
-            avg_sent = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0
+            # SEO Recommendations Summary
+            st.header("📈 Top SEO Recommendations")
+            recommendations = []
 
-            # 3. SEMANTIC SIMILARITY
-            if ref_text.strip():
-                try:
-                    sim_score = datatxt.sim(user_input, ref_text)
-                    st.subheader("🔁 Semantic Similarity")
-                    st.success(f"Similarity with reference: `{sim_score.get('similarity', 0.0):.2f}`")
-                except Exception as e:
-                    st.error(f"Similarity check failed: {e}")
-            else:
-                sim_score = {"similarity": None}
+            if missing_entities:
+                recommendations.append(
+                    f"Consider including missing entities like **{', '.join(sorted(missing_entities)[:5])}** to align with competitor coverage."
+                )
 
-            # 4. KEYWORD DENSITY
-            if keyword:
-                words = user_input.lower().split()
-                k_count = words.count(keyword.lower())
-                density = (k_count / len(words)) * 100 if words else 0
-                st.subheader("📊 Keyword Density")
-                st.write(f"Keyword `{keyword}` appears **{k_count}** times — density: **{density:.2f}%**")
+            if unique_entities:
+                recommendations.append(
+                    f"Highlight unique entities such as **{', '.join(sorted(unique_entities)[:5])}** as differentiators."
+                )
 
-            # 5. READABILITY
-            st.subheader("📘 Readability Score")
-            try:
-                score = textstat.flesch_reading_ease(user_input)
-                st.write(f"Flesch Reading Ease: **{score:.2f}**")
-            except Exception as e:
-                st.error(f"Readability error: {e}")
+            if score < 0:
+                recommendations.append("Your content has a negative sentiment — consider making the tone more positive or balanced.")
 
-            # 6. AUTOMATED RECOMMENDATIONS
-            st.subheader("🧠 Content Improvement Suggestions")
+            if not recommendations:
+                st.success("✅ No major improvements detected. Your content is well-aligned!")
 
-            if avg_sent < -0.2:
-                st.warning("⚠️ Content has a **negative tone** overall. Consider softening the language.")
-            elif avg_sent > 0.5:
-                st.info("😊 Content has a **positive tone**. Great for promotional messaging!")
+            for rec in recommendations:
+                st.markdown(f"- 💡 {rec}")
 
-            if len(filtered_entities) < 3:
-                st.warning("📉 Few named entities detected. Consider adding more **people, places, or organizations** for topical depth.")
-
-            if keyword and density < 1:
-                st.warning(f"🔑 Keyword `{keyword}` appears infrequently. Consider reinforcing it.")
-            elif keyword and density > 3:
-                st.warning(f"🚨 Keyword `{keyword}` might be overused. Avoid keyword stuffing.")
-
-            if sim_score.get("similarity") is not None and sim_score["similarity"] < 0.4:
-                st.warning("🔍 Your content has **low similarity** with the reference. Make sure it's addressing the same topic.")
-
-            if score < 50:
-                st.warning("📚 Content may be too complex. Aim for a **Flesch score above 60** for better readability.")
+        except Exception as e:
+            st.error(f"Competitor entity analysis error: {e}")
 
 else:
-    st.info("Please enter your Dandelion API token to begin.")
+    st.info("🔐 Please enter your API token and your content to begin.")
