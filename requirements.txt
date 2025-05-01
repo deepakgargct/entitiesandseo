@@ -1,0 +1,4 @@
+streamlit>=1.30.0
+textblob>=0.18.0
+textstat>=0.7.3
+git+https://github.com/giacbrd/python-dandelion-eu.git
