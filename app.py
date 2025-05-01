@@ -1,20 +1,20 @@
 import streamlit as st
 from dandelion import DataTXT
-import os
+from textblob import TextBlob
 
-# Setup
+# Streamlit page config
 st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
-st.title("🔍 SEO Entity & Sentiment Analyzer using Dandelion NLP")
+st.title("🔍 SEO Entity & Sentiment Analyzer using Dandelion + TextBlob")
 
-# Input fields
+# Inputs
 api_token = st.text_input("🔑 Enter your Dandelion API Token", type="password")
 user_text = st.text_area("✍️ Enter Your Content", height=200)
-ref_text = st.text_area("📄 (Optional) Enter Competitor Content for Comparison", height=200)
+ref_text = st.text_area("📄 (Optional) Enter Competitor Content", height=200)
 
 if api_token and user_text.strip():
     datatxt = DataTXT(token=api_token, min_confidence=0.6)
 
-    # Analyze Entities
+    # Entity Extraction
     st.header("🧠 Entity Extraction")
     try:
         nex_result = datatxt.nex(user_text, include="types")
@@ -27,25 +27,24 @@ if api_token and user_text.strip():
                 st.markdown(f"- **{ann.label}** ({ann.types[0].split('/')[-1] if ann.types else 'N/A'})")
         else:
             st.warning("No entities found.")
-
     except Exception as e:
         st.error(f"Entity extraction error: {e}")
 
-    # Analyze Sentiment
-    st.header("💬 Sentiment Analysis")
+    # Sentiment Analysis using TextBlob
+    st.header("💬 Sentiment Analysis (via TextBlob)")
     try:
-        sentiment_result = datatxt.sent(user_text)
-        score = sentiment_result.sentiment.get("score", 0)
+        blob = TextBlob(user_text)
+        score = blob.sentiment.polarity
         sentiment_label = (
             "Positive 😊" if score > 0 else "Negative 😠" if score < 0 else "Neutral 😐"
         )
         st.markdown(f"**Sentiment Score:** `{score:.3f}`")
         st.markdown(f"**Interpretation:** {sentiment_label}")
-
     except Exception as e:
         st.error(f"Sentiment analysis error: {e}")
+        score = 0  # fallback to avoid breaking later logic
 
-    # Competitor Entity Comparison
+    # Competitor Comparison
     if ref_text.strip():
         st.header("📎 Competitor Analysis: Entity Comparison")
         try:
@@ -72,7 +71,7 @@ if api_token and user_text.strip():
                 for ent in sorted(common_entities):
                     st.markdown(f"- 🔁 `{ent}`")
 
-            # SEO Recommendations Summary
+            # SEO Recommendations
             st.header("📈 Top SEO Recommendations")
             recommendations = []
 
@@ -87,7 +86,9 @@ if api_token and user_text.strip():
                 )
 
             if score < 0:
-                recommendations.append("Your content has a negative sentiment — consider making the tone more positive or balanced.")
+                recommendations.append(
+                    "Your content has a negative sentiment — consider making the tone more positive or balanced."
+                )
 
             if not recommendations:
                 st.success("✅ No major improvements detected. Your content is well-aligned!")
@@ -97,6 +98,5 @@ if api_token and user_text.strip():
 
         except Exception as e:
             st.error(f"Competitor entity analysis error: {e}")
-
 else:
     st.info("🔐 Please enter your API token and your content to begin.")
