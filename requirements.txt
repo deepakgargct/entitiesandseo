@@ -1,4 +1,5 @@
-streamlit>=1.30.0
-textblob>=0.18.0
-textstat>=0.7.3
+streamlit>=1.32.0
+textblob
 git+https://github.com/giacbrd/python-dandelion-eu.git
+sentence-transformers
+spacy
