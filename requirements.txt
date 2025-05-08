@@ -1,3 +1,7 @@
 streamlit>=1.32.0
 textblob
+streamlit
+dandelion-eu
+textblob
+scikit-learn
 git+https://github.com/giacbrd/python-dandelion-eu.git
