@@ -1,6 +1,14 @@
 import streamlit as st
 from dandelion import DataTXT
 from textblob import TextBlob
+from sentence_transformers import SentenceTransformer, util
+import spacy
+
+# Load SpaCy model
+nlp = spacy.load("en_core_web_sm")
+
+# Initialize sentence transformer for semantic similarity
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Streamlit page config
 st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
@@ -9,7 +17,11 @@ st.title("🔍 SEO Entity & Sentiment Analyzer using Dandelion + TextBlob")
 # Inputs
 api_token = st.text_input("🔑 Enter your Dandelion API Token", type="password")
 user_text = st.text_area("✍️ Enter Your Content", height=200)
+target_topic = st.text_input("🔑 Enter Target Topic (e.g. 'Web3 gaming')", placeholder="Web3 gaming")
 ref_text = st.text_area("📄 (Optional) Enter Competitor Content", height=200)
+
+# Predefined entities for coverage check (simple list, can be expanded)
+predefined_entities = ["blockchain", "gaming", "decentralized", "NFT", "Web3", "cryptocurrency"]
 
 if api_token and user_text.strip():
     datatxt = DataTXT(token=api_token, min_confidence=0.6)
@@ -18,10 +30,10 @@ if api_token and user_text.strip():
     st.header("🧠 Entity Extraction")
     try:
         nex_result = datatxt.nex(user_text, include="types,uri")
-        entities = [ann.label for ann in nex_result.annotations]
+        user_entities = [ann.label.lower() for ann in nex_result.annotations]
 
-        if entities:
-            st.success(f"✅ Found {len(entities)} Entities:")
+        if user_entities:
+            st.success(f"✅ Found {len(user_entities)} Entities:")
             st.markdown("### 🏷 Entities Detected with Citations:")
             for ann in nex_result.annotations:
                 label = ann.label
@@ -50,83 +62,45 @@ if api_token and user_text.strip():
         st.error(f"Sentiment analysis error: {e}")
         score = 0  # fallback to avoid breaking later logic
 
-    # Competitor Comparison
+    # Entity Coverage Scoring (based on predefined entities)
+    st.header("📊 Entity Coverage Score")
+    if target_topic.strip():
+        target_topic_entities = [e.lower() for e in predefined_entities]
+        matched_entities = [e for e in user_entities if e in target_topic_entities]
+        coverage_score = len(matched_entities) / len(target_topic_entities) * 100
+
+        st.markdown(f"**Entities Found for '{target_topic}':**")
+        st.markdown(f"Matched Entities: {', '.join(matched_entities)}")
+        st.markdown(f"**Coverage Score:** {coverage_score:.2f}%")
+        
+    else:
+        st.info("Enter a target topic to get the entity coverage score.")
+
+    # Semantic Similarity Analysis
     if ref_text.strip():
-        st.header("📎 Competitor Analysis: Entity Comparison")
+        st.header("📎 Competitor Analysis: Semantic Similarity")
         try:
-            comp_result = datatxt.nex(ref_text, include="types,uri")
-            user_entity_map = {ann.label.lower(): ann for ann in nex_result.annotations}
-            comp_entity_map = {ann.label.lower(): ann for ann in comp_result.annotations}
+            # Compare user content to competitor content using Sentence Transformers
+            user_sentences = [sent.text for sent in nlp(user_text).sents]
+            ref_sentences = [sent.text for sent in nlp(ref_text).sents]
 
-            user_labels = set(user_entity_map.keys())
-            comp_labels = set(comp_entity_map.keys())
+            # Encode the sentences using Sentence-Transformer
+            user_embeddings = model.encode(user_sentences, convert_to_tensor=True)
+            ref_embeddings = model.encode(ref_sentences, convert_to_tensor=True)
 
-            missing = comp_labels - user_labels
-            unique = user_labels - comp_labels
-            common = user_labels & comp_labels
+            # Compute cosine similarity
+            cosine_similarities = util.pytorch_cos_sim(user_embeddings, ref_embeddings)
 
-            if missing:
-                st.warning("📌 Entities your content is **missing** (used by competitor):")
-                for label in sorted(missing):
-                    ann = comp_entity_map[label]
-                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
-                    if uri:
-                        st.markdown(f"- ❗ **[{label.title()}]({uri})**")
-                    else:
-                        st.markdown(f"- ❗ `{label.title()}`")
+            # Show highest similarity scores (top 3 matches)
+            top_matches = cosine_similarities.max(dim=1)[0].cpu().numpy()
+            top_matches_indices = cosine_similarities.max(dim=1)[1].cpu().numpy()
 
-            if unique:
-                st.info("🌿 Entities unique to **your content** (not used by competitor):")
-                for label in sorted(unique):
-                    ann = user_entity_map[label]
-                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
-                    if uri:
-                        st.markdown(f"- ✅ **[{label.title()}]({uri})**")
-                    else:
-                        st.markdown(f"- ✅ `{label.title()}`")
-
-            if common:
-                st.success("🎯 Entities common in both contents:")
-                for label in sorted(common):
-                    ann = user_entity_map[label]
-                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
-                    if uri:
-                        st.markdown(f"- 🔁 **[{label.title()}]({uri})**")
-                    else:
-                        st.markdown(f"- 🔁 `{label.title()}`")
-
-            # SEO Recommendations
-            st.header("📈 Top SEO Recommendations")
-            recommendations = []
-
-            if missing:
-                top_missing = [f"[{comp_entity_map[l].label}]({comp_entity_map[l].uri})" 
-                               if hasattr(comp_entity_map[l], "uri") and comp_entity_map[l].uri 
-                               else f"`{comp_entity_map[l].label}`" for l in sorted(missing)[:5]]
-                recommendations.append(
-                    f"Consider including missing entities like {', '.join(top_missing)} to align with competitor coverage."
-                )
-
-            if unique:
-                top_unique = [f"[{user_entity_map[l].label}]({user_entity_map[l].uri})" 
-                              if hasattr(user_entity_map[l], "uri") and user_entity_map[l].uri 
-                              else f"`{user_entity_map[l].label}`" for l in sorted(unique)[:5]]
-                recommendations.append(
-                    f"Highlight unique entities such as {', '.join(top_unique)} as differentiators."
-                )
-
-            if score < 0:
-                recommendations.append(
-                    "Your content has a negative sentiment — consider making the tone more positive or balanced."
-                )
-
-            if not recommendations:
-                st.success("✅ No major improvements detected. Your content is well-aligned!")
-
-            for rec in recommendations:
-                st.markdown(f"- 💡 {rec}")
+            st.markdown("### Semantic Similarity Scores (User vs Competitor):")
+            for idx, score in zip(top_matches_indices[:3], top_matches[:3]):
+                st.markdown(f"- **{user_sentences[idx]}** → {ref_sentences[idx]} (Score: {score:.2f})")
 
         except Exception as e:
-            st.error(f"Competitor entity analysis error: {e}")
+            st.error(f"Semantic similarity analysis error: {e}")
+
 else:
     st.info("🔐 Please enter your API token and your content to begin.")
