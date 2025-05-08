@@ -2,10 +2,8 @@
 import streamlit as st
 from dandelion import DataTXT
 from textblob import TextBlob
-from sklearn.feature_extraction.text import TfidfVectorizer
-from collections import defaultdict
+import json
 
-# Streamlit page config
 st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
 st.title("🔍 SEO Entity & Sentiment Analyzer using Dandelion + TextBlob")
 
@@ -14,7 +12,9 @@ api_token = st.text_input("🔑 Enter your Dandelion API Token", type="password"
 user_text = st.text_area("✍️ Enter Your Content", height=200)
 ref_text = st.text_area("📄 (Optional) Enter Competitor Content", height=200)
 
-if api_token and user_text.strip():
+analyze = st.button("🔍 Analyze")
+
+if analyze and api_token and user_text.strip():
     datatxt = DataTXT(token=api_token, min_confidence=0.6)
 
     # Entity Extraction
@@ -24,33 +24,22 @@ if api_token and user_text.strip():
         entities = [ann.label for ann in nex_result.annotations]
 
         if entities:
-            st.success(f"✅ Found {len(entities)} Entities:")
-            st.markdown("### 🏷 Entities Detected with Citations:")
+            st.success(f"✅ Found {len(entities)} Entities")
+            entity_types = {}
             for ann in nex_result.annotations:
                 label = ann.label
-                entity_type = ann.types[0].split("/")[-1] if ann.types else "N/A"
-                uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
-                if uri:
-                    st.markdown(f"- **[{label}]({uri})** ({entity_type})")
-                else:
-                    st.markdown(f"- **{label}** ({entity_type})")
+                entity_type = ann.types[0].split("/")[-1] if ann.types else "Other"
+                entity_types.setdefault(entity_type, []).append(label)
 
-            # Group entities by type
-            entity_type_groups = defaultdict(list)
-            for ann in nex_result.annotations:
-                if ann.types:
-                    t = ann.types[0].split("/")[-1]
-                    entity_type_groups[t].append(ann.label)
-
-            st.markdown("### 🗂 Your Entity Distribution by Type:")
-            for t, labels in entity_type_groups.items():
-                st.markdown(f"**{t}**: {', '.join(labels)}")
+            for ent_type, labels in entity_types.items():
+                st.markdown(f"**{ent_type}** ({len(labels)}):")
+                st.markdown(", ".join(set(labels)))
         else:
             st.warning("No entities found.")
     except Exception as e:
         st.error(f"Entity extraction error: {e}")
 
-    # Sentiment Analysis using TextBlob
+    # Sentiment Analysis
     st.header("💬 Sentiment Analysis (via TextBlob)")
     try:
         blob = TextBlob(user_text)
@@ -62,11 +51,11 @@ if api_token and user_text.strip():
         st.markdown(f"**Interpretation:** {sentiment_label}")
     except Exception as e:
         st.error(f"Sentiment analysis error: {e}")
-        score = 0  # fallback to avoid breaking later logic
+        score = 0
 
-    # Competitor Comparison
+    # Competitor Analysis
     if ref_text.strip():
-        st.header("📎 Competitor Analysis: Entity & Keyword Comparison")
+        st.header("📎 Competitor Entity Benchmarking")
         try:
             comp_result = datatxt.nex(ref_text, include="types,uri")
             user_entity_map = {ann.label.lower(): ann for ann in nex_result.annotations}
@@ -79,97 +68,50 @@ if api_token and user_text.strip():
             unique = user_labels - comp_labels
             common = user_labels & comp_labels
 
-            if missing:
-                st.warning("📌 Entities your content is **missing** (used by competitor):")
-                for label in sorted(missing):
-                    ann = comp_entity_map[label]
-                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
-                    if uri:
-                        st.markdown(f"- ❗ **[{label.title()}]({uri})**")
-                    else:
-                        st.markdown(f"- ❗ `{label.title()}`")
+            st.subheader("📊 Coverage Benchmarking")
+            st.markdown(f"- **Your Entities:** {len(user_labels)}")
+            st.markdown(f"- **Competitor Entities:** {len(comp_labels)}")
+            st.markdown(f"- **Overlap:** {len(common)} shared entities")
+            st.markdown(f"- **Missing Entities:** {len(missing)}")
+            st.markdown(f"- **Unique to You:** {len(unique)}")
 
-            if unique:
-                st.info("🌿 Entities unique to **your content** (not used by competitor):")
-                for label in sorted(unique):
-                    ann = user_entity_map[label]
-                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
-                    if uri:
-                        st.markdown(f"- ✅ **[{label.title()}]({uri})**")
-                    else:
-                        st.markdown(f"- ✅ `{label.title()}`")
-
-            if common:
-                st.success("🎯 Entities common in both contents:")
-                for label in sorted(common):
-                    ann = user_entity_map[label]
-                    uri = ann.uri if hasattr(ann, "uri") and ann.uri else None
-                    if uri:
-                        st.markdown(f"- 🔁 **[{label.title()}]({uri})**")
-                    else:
-                        st.markdown(f"- 🔁 `{label.title()}`")
-
-            # Entity Coverage Score
-            coverage = len(common) / len(comp_labels) * 100 if comp_labels else 0
-            st.metric("Entity Coverage vs Competitor", f"{coverage:.1f}%")
-
-            # TF-IDF Keyword Gap
-            vectorizer = TfidfVectorizer(stop_words='english')
-            tfidf = vectorizer.fit_transform([user_text, ref_text])
-            feature_names = vectorizer.get_feature_names_out()
-
-            user_scores = tfidf[0].toarray()[0]
-            comp_scores = tfidf[1].toarray()[0]
-
-            gap_keywords = {
-                word: comp_scores[idx] - user_scores[idx]
-                for idx, word in enumerate(feature_names)
-                if comp_scores[idx] > user_scores[idx]
-            }
-
-            top_keywords = sorted(gap_keywords.items(), key=lambda x: x[1], reverse=True)[:10]
-            st.markdown("### 🔍 Top Missing Keywords (TF-IDF Weighted):")
-            for word, score in top_keywords:
-                st.markdown(f"- `{word}` (gap score: {score:.3f})")
-
-            # SEO Recommendations
-            st.header("📈 Top SEO Recommendations")
+            st.header("📈 SEO Recommendations")
             recommendations = []
-
             if missing:
-                top_missing = [f"[{comp_entity_map[l].label}]({comp_entity_map[l].uri})"
-                               if hasattr(comp_entity_map[l], "uri") and comp_entity_map[l].uri
-                               else f"`{comp_entity_map[l].label}`" for l in sorted(missing)[:5]]
-                recommendations.append(
-                    f"Consider including missing entities like {', '.join(top_missing)} to align with competitor coverage."
-                )
-
+                top_missing = [comp_entity_map[l].label for l in sorted(missing)[:5]]
+                recommendations.append(f"Include missing entities: {', '.join(top_missing)}.")
             if unique:
-                top_unique = [f"[{user_entity_map[l].label}]({user_entity_map[l].uri})"
-                              if hasattr(user_entity_map[l], "uri") and user_entity_map[l].uri
-                              else f"`{user_entity_map[l].label}`" for l in sorted(unique)[:5]]
-                recommendations.append(
-                    f"Highlight unique entities such as {', '.join(top_unique)} as differentiators."
-                )
-
+                top_unique = [user_entity_map[l].label for l in sorted(unique)[:5]]
+                recommendations.append(f"Highlight your unique entities: {', '.join(top_unique)}.")
             if score < 0:
-                recommendations.append(
-                    "Your content has a negative sentiment — consider making the tone more positive or balanced."
-                )
-
-            if top_keywords:
-                suggestions = ", ".join([f"`{k}`" for k, _ in top_keywords[:5]])
-                recommendations.append(
-                    f"Add keywords like {suggestions} to improve topical relevance."
-                )
-
+                recommendations.append("Consider improving the tone to be more positive or balanced.")
             if not recommendations:
-                st.success("✅ No major improvements detected. Your content is well-aligned!")
-
+                st.success("✅ Your content is well-aligned!")
             for rec in recommendations:
                 st.markdown(f"- 💡 {rec}")
-
         except Exception as e:
             st.error(f"Competitor entity analysis error: {e}")
+
+    # Schema Markup
+    st.header("📌 Auto-Generated Entity Schema Markup")
+    schema_entities = []
+    for ann in nex_result.annotations:
+        ent_type = ann.types[0].split("/")[-1] if ann.types else "Thing"
+        entity = {
+            "@type": ent_type,
+            "name": ann.label
+        }
+        if hasattr(ann, "uri") and ann.uri:
+            entity["@id"] = ann.uri
+        schema_entities.append(entity)
+
+    json_ld = {
+        "@context": "https://schema.org",
+        "@graph": schema_entities
+    }
+
+    st.code(json.dumps(json_ld, indent=2), language="json")
+    st.download_button("📥 Download Schema", data=json.dumps(json_ld, indent=2), file_name="entity-schema.json", mime="application/json")
+
 else:
-    st.info("🔐 Please enter your API token and your content to begin.")
+    st.info("🔐 Please enter your API token and content, then click 'Analyze'.")
