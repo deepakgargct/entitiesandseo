@@ -3,6 +3,8 @@ from dandelion import DataTXT
 from textblob import TextBlob
 from sentence_transformers import SentenceTransformer, util
 import spacy
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 # Load SpaCy model
 nlp = spacy.load("en_core_web_sm")
@@ -23,11 +25,12 @@ ref_text = st.text_area("📄 (Optional) Enter Competitor Content", height=200)
 # Predefined entities for coverage check (simple list, can be expanded)
 predefined_entities = ["blockchain", "gaming", "decentralized", "NFT", "Web3", "cryptocurrency"]
 
-if api_token and user_text.strip():
-    datatxt = DataTXT(token=api_token, min_confidence=0.6)
+# Thread pool executor
+executor = ThreadPoolExecutor(max_workers=2)
 
-    # Entity Extraction
-    st.header("🧠 Entity Extraction")
+# Function to extract entities
+def extract_entities():
+    datatxt = DataTXT(token=api_token, min_confidence=0.6)
     try:
         nex_result = datatxt.nex(user_text, include="types,uri")
         user_entities = [ann.label.lower() for ann in nex_result.annotations]
@@ -48,8 +51,8 @@ if api_token and user_text.strip():
     except Exception as e:
         st.error(f"Entity extraction error: {e}")
 
-    # Sentiment Analysis using TextBlob
-    st.header("💬 Sentiment Analysis (via TextBlob)")
+# Function to perform sentiment analysis
+def analyze_sentiment():
     try:
         blob = TextBlob(user_text)
         score = blob.sentiment.polarity
@@ -60,10 +63,9 @@ if api_token and user_text.strip():
         st.markdown(f"**Interpretation:** {sentiment_label}")
     except Exception as e:
         st.error(f"Sentiment analysis error: {e}")
-        score = 0  # fallback to avoid breaking later logic
 
-    # Entity Coverage Scoring (based on predefined entities)
-    st.header("📊 Entity Coverage Score")
+# Function to analyze entity coverage
+def analyze_coverage():
     if target_topic.strip():
         target_topic_entities = [e.lower() for e in predefined_entities]
         matched_entities = [e for e in user_entities if e in target_topic_entities]
@@ -72,13 +74,12 @@ if api_token and user_text.strip():
         st.markdown(f"**Entities Found for '{target_topic}':**")
         st.markdown(f"Matched Entities: {', '.join(matched_entities)}")
         st.markdown(f"**Coverage Score:** {coverage_score:.2f}%")
-        
     else:
         st.info("Enter a target topic to get the entity coverage score.")
 
-    # Semantic Similarity Analysis
+# Function to analyze semantic similarity
+def analyze_similarity():
     if ref_text.strip():
-        st.header("📎 Competitor Analysis: Semantic Similarity")
         try:
             # Compare user content to competitor content using Sentence Transformers
             user_sentences = [sent.text for sent in nlp(user_text).sents]
@@ -102,5 +103,14 @@ if api_token and user_text.strip():
         except Exception as e:
             st.error(f"Semantic similarity analysis error: {e}")
 
+# Start background tasks
+if api_token and user_text.strip():
+    # Start tasks in background threads
+    with executor:
+        future1 = executor.submit(extract_entities)
+        future2 = executor.submit(analyze_sentiment)
+        future3 = executor.submit(analyze_coverage)
+        future4 = executor.submit(analyze_similarity)
+        
 else:
     st.info("🔐 Please enter your API token and your content to begin.")
