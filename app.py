@@ -1,6 +1,9 @@
+
 import streamlit as st
 from dandelion import DataTXT
 from textblob import TextBlob
+from sklearn.feature_extraction.text import TfidfVectorizer
+from collections import defaultdict
 
 # Streamlit page config
 st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
@@ -31,6 +34,17 @@ if api_token and user_text.strip():
                     st.markdown(f"- **[{label}]({uri})** ({entity_type})")
                 else:
                     st.markdown(f"- **{label}** ({entity_type})")
+
+            # Group entities by type
+            entity_type_groups = defaultdict(list)
+            for ann in nex_result.annotations:
+                if ann.types:
+                    t = ann.types[0].split("/")[-1]
+                    entity_type_groups[t].append(ann.label)
+
+            st.markdown("### 🗂 Your Entity Distribution by Type:")
+            for t, labels in entity_type_groups.items():
+                st.markdown(f"**{t}**: {', '.join(labels)}")
         else:
             st.warning("No entities found.")
     except Exception as e:
@@ -52,7 +66,7 @@ if api_token and user_text.strip():
 
     # Competitor Comparison
     if ref_text.strip():
-        st.header("📎 Competitor Analysis: Entity Comparison")
+        st.header("📎 Competitor Analysis: Entity & Keyword Comparison")
         try:
             comp_result = datatxt.nex(ref_text, include="types,uri")
             user_entity_map = {ann.label.lower(): ann for ann in nex_result.annotations}
@@ -95,21 +109,44 @@ if api_token and user_text.strip():
                     else:
                         st.markdown(f"- 🔁 `{label.title()}`")
 
+            # Entity Coverage Score
+            coverage = len(common) / len(comp_labels) * 100 if comp_labels else 0
+            st.metric("Entity Coverage vs Competitor", f"{coverage:.1f}%")
+
+            # TF-IDF Keyword Gap
+            vectorizer = TfidfVectorizer(stop_words='english')
+            tfidf = vectorizer.fit_transform([user_text, ref_text])
+            feature_names = vectorizer.get_feature_names_out()
+
+            user_scores = tfidf[0].toarray()[0]
+            comp_scores = tfidf[1].toarray()[0]
+
+            gap_keywords = {
+                word: comp_scores[idx] - user_scores[idx]
+                for idx, word in enumerate(feature_names)
+                if comp_scores[idx] > user_scores[idx]
+            }
+
+            top_keywords = sorted(gap_keywords.items(), key=lambda x: x[1], reverse=True)[:10]
+            st.markdown("### 🔍 Top Missing Keywords (TF-IDF Weighted):")
+            for word, score in top_keywords:
+                st.markdown(f"- `{word}` (gap score: {score:.3f})")
+
             # SEO Recommendations
             st.header("📈 Top SEO Recommendations")
             recommendations = []
 
             if missing:
-                top_missing = [f"[{comp_entity_map[l].label}]({comp_entity_map[l].uri})" 
-                               if hasattr(comp_entity_map[l], "uri") and comp_entity_map[l].uri 
+                top_missing = [f"[{comp_entity_map[l].label}]({comp_entity_map[l].uri})"
+                               if hasattr(comp_entity_map[l], "uri") and comp_entity_map[l].uri
                                else f"`{comp_entity_map[l].label}`" for l in sorted(missing)[:5]]
                 recommendations.append(
                     f"Consider including missing entities like {', '.join(top_missing)} to align with competitor coverage."
                 )
 
             if unique:
-                top_unique = [f"[{user_entity_map[l].label}]({user_entity_map[l].uri})" 
-                              if hasattr(user_entity_map[l], "uri") and user_entity_map[l].uri 
+                top_unique = [f"[{user_entity_map[l].label}]({user_entity_map[l].uri})"
+                              if hasattr(user_entity_map[l], "uri") and user_entity_map[l].uri
                               else f"`{user_entity_map[l].label}`" for l in sorted(unique)[:5]]
                 recommendations.append(
                     f"Highlight unique entities such as {', '.join(top_unique)} as differentiators."
@@ -118,6 +155,12 @@ if api_token and user_text.strip():
             if score < 0:
                 recommendations.append(
                     "Your content has a negative sentiment — consider making the tone more positive or balanced."
+                )
+
+            if top_keywords:
+                suggestions = ", ".join([f"`{k}`" for k, _ in top_keywords[:5]])
+                recommendations.append(
+                    f"Add keywords like {suggestions} to improve topical relevance."
                 )
 
             if not recommendations:
