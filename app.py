@@ -1,113 +1,108 @@
 import streamlit as st
-import json
-from textblob import TextBlob
-from wordcloud import WordCloud
-import matplotlib.pyplot as plt
-from collections import Counter
-import re
 from dandelion import DataTXT
-
-# Dandelion API setup
-API_TOKEN = "YOUR_DANDELION_API_TOKEN"  # Replace with your token
-nlp = DataTXT(token=API_TOKEN)
+from textblob import TextBlob
+import json
 
 st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
-st.title("🧠 SEO Entity & Sentiment Analyzer")
+st.title("🔍 SEO Entity & Sentiment Analyzer (Dandelion + TextBlob)")
 
-with st.expander("ℹ️ How it works"):
-    st.markdown("""
-    - Extracts **entities** and performs **sentiment analysis** on your text.
-    - Automatically generates **Entity Schema Markup** (LocalBusiness).
-    """)
+# Input fields
+api_token = st.text_input("🔑 Enter your Dandelion API Token", type="password")
+user_text = st.text_area("✍️ Enter Your Content", height=200)
+ref_text = st.text_area("📄 (Optional) Enter Competitor Content", height=200)
+analyze_btn = st.button("🚀 Analyze")
 
-# --- Text Input
-content = st.text_area("📝 Paste your content here", height=300)
-if st.button("🔍 Analyze"):
-    if content:
-        # Sentiment Analysis
-        blob = TextBlob(content)
-        sentiment_score = blob.sentiment.polarity
-        sentiment_label = "Positive" if sentiment_score > 0 else "Negative" if sentiment_score < 0 else "Neutral"
-        st.subheader("📈 Sentiment Analysis")
-        st.metric("Sentiment", sentiment_label, f"{sentiment_score:.2f}")
+if api_token and user_text.strip() and analyze_btn:
+    datatxt = DataTXT(token=api_token, min_confidence=0.6)
 
-        # Entity Extraction
-        with st.spinner("Extracting entities..."):
-            response = nlp.entities(content, include="types,categories,lod")
-            entities = response.annotations
-            if entities:
-                st.subheader("🔍 Extracted Entities")
-                entity_data = []
-                seen = set()
-                for ent in entities:
-                    label = ent.spot
-                    typ = ent.types[0].split(":")[-1] if ent.types else "Thing"
-                    uri = ent.lod.get("wikidata") or ent.lod.get("dbpedia") or ""
-                    key = (label.lower(), typ.lower())
-                    if key not in seen:
-                        seen.add(key)
-                        entity_data.append({"label": label, "type": typ, "uri": uri})
-                for e in entity_data:
-                   st.markdown(f"- **{e['label']}** ({e['type']}) {'🔗[' + e['uri'] + '](' + e['uri'] + ')' if e['uri'] else ''}")
-            else:
-                st.info("No entities found.")
-    else:
-        st.warning("Please enter some text to analyze.")
+    # Entity extraction for user content
+    st.header("🧠 Entity Extraction")
+    try:
+        nex_result = datatxt.nex(user_text, include="types,uri")
+        entities = [ann.label for ann in nex_result.annotations]
+        entity_data = [
+            {
+                "label": ann.label,
+                "type": ann.types[0].split("/")[-1] if ann.types else "Thing",
+                "uri": ann.uri if hasattr(ann, "uri") and ann.uri else None
+            }
+            for ann in nex_result.annotations
+        ]
+        if entities:
+            st.success(f"✅ Found {len(entities)} Entities:")
+            for ent in entity_data:
+                if ent["uri"]:
+                    st.markdown(f"- **[{ent['label']}]({ent['uri']})** ({ent['type']})")
+                else:
+                    st.markdown(f"- **{ent['label']}** ({ent['type']})")
+        else:
+            st.warning("No entities found.")
+    except Exception as e:
+        st.error(f"Entity extraction error: {e}")
+        entity_data = []
 
-# --- Entity Schema Generator (only after analysis)
-if 'entity_data' in locals() and entity_data:
-    st.header("🧾 Entity Schema Markup Generator")
+    # Sentiment analysis
+    st.header("💬 Sentiment Analysis")
+    try:
+        blob = TextBlob(user_text)
+        polarity = blob.sentiment.polarity
+        sentiment_label = "Positive 😊" if polarity > 0 else "Negative 😠" if polarity < 0 else "Neutral 😐"
+        st.markdown(f"**Sentiment Score:** {polarity:.3f}")
+        st.markdown(f"**Interpretation:** {sentiment_label}")
+    except Exception as e:
+        st.error(f"Sentiment analysis error: {e}")
 
-    biz_name = st.text_input("🏷️ Business Name")
-    biz_desc = st.text_area("📝 Business Description")
-    biz_url = st.text_input("🔗 Website URL")
-    biz_logo = st.text_input("🖼️ Logo URL")
-    biz_image = st.text_input("📷 Image URL")
-    biz_keywords = st.text_area("🔑 Keywords (comma-separated)")
+    # Competitor comparison if provided
+    if ref_text.strip():
+        st.header("📎 Competitor Comparison")
+        try:
+            comp_result = datatxt.nex(ref_text, include="types,uri")
+            user_entity_labels = set([ent["label"].lower() for ent in entity_data])
+            comp_entities = [
+                {
+                    "label": ann.label,
+                    "type": ann.types[0].split("/")[-1] if ann.types else "Thing",
+                    "uri": ann.uri if hasattr(ann, "uri") and ann.uri else None
+                }
+                for ann in comp_result.annotations
+            ]
+            comp_entity_labels = set([ent["label"].lower() for ent in comp_entities])
 
-    # Address
-    st.subheader("📍 Business Address")
-    street = st.text_input("Street Address")
-    locality = st.text_input("Locality (City)")
-    region = st.text_input("Region/State")
-    postal_code = st.text_input("Postal Code")
-    country = st.text_input("Country")
+            missing = comp_entity_labels - user_entity_labels
+            extra = user_entity_labels - comp_entity_labels
+            common = user_entity_labels & comp_entity_labels
 
-    # Contact
-    st.subheader("📞 Contact Info")
-    contact_phone = st.text_input("Phone Number")
-    contact_email = st.text_input("Email")
-    contact_type = st.selectbox("Contact Type", ["customer support", "sales", "technical support", "other"])
+            coverage_score = len(common) / len(comp_entity_labels.union(user_entity_labels)) if comp_entity_labels.union(user_entity_labels) else 0
 
-    # Social links
-    st.subheader("🔗 Social Profiles")
-    same_as = st.text_area("Enter one URL per line")
+            st.markdown(f"**Coverage Depth Score:** {coverage_score:.2%}")
+            st.progress(coverage_score)
 
-    if biz_name and biz_desc and biz_url:
+            if missing:
+                st.warning("📌 Missing Entities:")
+                for ent in comp_entities:
+                    if ent["label"].lower() in missing:
+                        st.markdown(f"- ❗ {ent['label']}")
+
+            if extra:
+                st.info("🌿 Extra Entities in Your Content:")
+                for ent in entity_data:
+                    if ent["label"].lower() in extra:
+                        st.markdown(f"- ✅ {ent['label']}")
+
+            if common:
+                st.success("🎯 Shared Entities:")
+                for label in sorted(common):
+                    st.markdown(f"- 🔁 {label}")
+
+        except Exception as e:
+            st.error(f"Competitor analysis error: {e}")
+
+    # JSON-LD schema markup generation
+    if entity_data:
+        st.header("🧾 Auto-Generated Entity Schema Markup (JSON-LD)")
         schema = {
             "@context": "https://schema.org",
-            "@type": "LocalBusiness",
-            "name": biz_name,
-            "description": biz_desc,
-            "url": biz_url,
-            "logo": biz_logo if biz_logo else None,
-            "image": [biz_image] if biz_image else None,
-            "keywords": [k.strip() for k in biz_keywords.split(",")] if biz_keywords else [],
-            "address": {
-                "@type": "PostalAddress",
-                "streetAddress": street,
-                "addressLocality": locality,
-                "addressRegion": region,
-                "postalCode": postal_code,
-                "addressCountry": country,
-            },
-            "contactPoint": {
-                "@type": "ContactPoint",
-                "telephone": contact_phone,
-                "email": contact_email,
-                "contactType": contact_type
-            },
-            "sameAs": [s.strip() for s in same_as.splitlines() if s.strip()],
+            "@type": "Article",
             "mainEntity": [
                 {
                     "@type": ent["type"],
@@ -116,12 +111,8 @@ if 'entity_data' in locals() and entity_data:
                 } for ent in entity_data
             ]
         }
-
-        # Clean empty
-        schema = {k: v for k, v in schema.items() if v and v != {"@type": "PostalAddress"} and v != {"@type": "ContactPoint"}}
         schema_str = json.dumps(schema, indent=2)
-
         st.code(schema_str, language="json")
         st.download_button("⬇️ Download Schema", schema_str, file_name="entity_schema.json", mime="application/json")
-    else:
-        st.info("ℹ️ Please enter business name, description, and URL to generate schema.")
+else:
+    st.info("🔐 Enter your API key and content, then click Analyze.")
