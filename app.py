@@ -48,7 +48,7 @@ if st.button("🔍 Analyze"):
                         seen.add(key)
                         entity_data.append({"label": label, "type": typ, "uri": uri})
                 for e in entity_data:
-                    st.markdown(f"- **{e['label']}** ({e['type']}) {f'🔗[{e['uri']}]({e['uri']})' if e['uri'] else ''}")
+                   st.markdown(f"- **{e['label']}** ({e['type']}) {'🔗[' + e['uri'] + '](' + e['uri'] + ')' if e['uri'] else ''}")
             else:
                 st.info("No entities found.")
     else:
