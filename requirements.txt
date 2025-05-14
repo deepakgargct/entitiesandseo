@@ -4,4 +4,5 @@ streamlit
 dandelion-eu
 textblob
 scikit-learn
+wordcloud
 git+https://github.com/giacbrd/python-dandelion-eu.git
