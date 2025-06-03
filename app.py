@@ -4,12 +4,11 @@ from textblob import TextBlob
 import json
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
+from SPARQLWrapper import SPARQLWrapper, JSON
 import textstat
 
 st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
-st.title("🔍 SEO Entity & Sentiment Analyzer (Dandelion + TextBlob)")
+st.title("🔍 SEO Entity & Sentiment Analyzer (Dandelion + TextBlob + DBpedia)")
 
 # Input fields
 api_token = st.text_input("🔑 Enter your Dandelion API Token", type="password")
@@ -22,6 +21,36 @@ publisher = st.text_input("🏢 Publisher Name (optional)")
 date_published = st.text_input("📅 Date Published (YYYY-MM-DD, optional)")
 description = st.text_area("📝 Short Description (optional)", height=100)
 analyze_btn = st.button("🚀 Analyze")
+
+def fetch_related_entities(entity_labels):
+    """
+    Given a list of entity labels, query DBpedia for related entities using SPARQL.
+    Returns a set of related entity labels to suggest missing entities.
+    """
+    sparql = SPARQLWrapper("http://dbpedia.org/sparql")
+    related_entities = set()
+
+    for label in entity_labels:
+        query = f"""
+        SELECT DISTINCT ?relatedLabel WHERE {{
+          ?entity rdfs:label "{label}"@en .
+          ?entity dbo:wikiPageWikiLink ?related .
+          ?related rdfs:label ?relatedLabel .
+          FILTER (lang(?relatedLabel) = 'en')
+        }}
+        LIMIT 10
+        """
+        sparql.setQuery(query)
+        sparql.setReturnFormat(JSON)
+        try:
+            results = sparql.query().convert()
+            for result in results["results"]["bindings"]:
+                related_label = result["relatedLabel"]["value"]
+                if related_label.lower() not in [l.lower() for l in entity_labels]:
+                    related_entities.add(related_label)
+        except Exception as e:
+            st.error(f"SPARQL query error for entity '{label}': {e}")
+    return related_entities
 
 if api_token and user_text.strip() and analyze_btn:
     datatxt = DataTXT(token=api_token, min_confidence=0.6)
@@ -129,6 +158,20 @@ if api_token and user_text.strip() and analyze_btn:
                 st.markdown(f"- 🎯 {ent['label']} ({ent['type']})")
         else:
             st.info("No exact keyword matches found among extracted entities.")
+
+    # Suggest missing related entities via DBpedia
+    st.header("💡 Suggested Missing Related Entities (DBpedia)")
+    try:
+        current_entity_labels = [ent["label"] for ent in entity_data]
+        related_entities = fetch_related_entities(current_entity_labels)
+        if related_entities:
+            st.markdown("These related entities are suggested to improve topic coverage and semantic depth:")
+            for rel_ent in sorted(related_entities):
+                st.markdown(f"- {rel_ent}")
+        else:
+            st.info("No related entities suggested. Your content covers key topics well!")
+    except Exception as e:
+        st.error(f"Error fetching related entities: {e}")
 
     # Competitor comparison if provided
     if ref_text.strip():
