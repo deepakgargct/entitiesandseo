@@ -1,11 +1,10 @@
 import streamlit as st
 from dandelion import DataTXT
 from textblob import TextBlob
-import json
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
+import json
+import re
 
 st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
 st.title("🔍 SEO Entity & Sentiment Analyzer (Dandelion + TextBlob)")
@@ -14,126 +13,173 @@ st.title("🔍 SEO Entity & Sentiment Analyzer (Dandelion + TextBlob)")
 api_token = st.text_input("🔑 Enter your Dandelion API Token", type="password")
 user_text = st.text_area("✍️ Enter Your Content", height=200)
 ref_text = st.text_area("📄 (Optional) Enter Competitor Content", height=200)
-keyword_input = st.text_input("🔎 (Optional) Enter Target Keywords (comma-separated)")
+keyword_input = st.text_input("🔑 Enter comma-separated keywords for Keyword-to-Entity Matching")
 analyze_btn = st.button("🚀 Analyze")
 
-if api_token and user_text.strip() and analyze_btn:
-    datatxt = DataTXT(token=api_token, min_confidence=0.6)
+def split_sections(text):
+    # Split by double newlines as sections
+    return [sec.strip() for sec in re.split(r'\n\s*\n', text) if sec.strip()]
 
-    # Entity extraction for user content
-    st.header("🧠 Entity Extraction")
+def extract_entities(datatxt, text):
     try:
-        nex_result = datatxt.nex(user_text, include="types,uri,confidence")
-        entity_data = [
+        result = datatxt.nex(text, include="types,uri,confidence")
+        entities = [
             {
                 "label": ann.label,
                 "type": ann.types[0].split("/")[-1] if ann.types else "Thing",
                 "uri": ann.uri if hasattr(ann, "uri") and ann.uri else None,
-                "confidence": round(ann.confidence, 2) if hasattr(ann, "confidence") else None
+                "confidence": ann.confidence if hasattr(ann, "confidence") else None
             }
-            for ann in nex_result.annotations
+            for ann in result.annotations
         ]
-        if entity_data:
-            st.success(f"✅ Found {len(entity_data)} Entities:")
-            for ent in entity_data:
-                line = f"- **{ent['label']}** ({ent['type']}) - Confidence: {ent['confidence']}"
-                if ent['uri']:
-                    line += f" [🔗]({ent['uri']})"
-                st.markdown(line)
-        else:
-            st.warning("No entities found.")
+        # Deduplicate entities by label (keep highest confidence)
+        unique = {}
+        for ent in entities:
+            key = ent["label"].lower()
+            if key not in unique or (ent["confidence"] and ent["confidence"] > unique[key]["confidence"]):
+                unique[key] = ent
+        return list(unique.values())
     except Exception as e:
         st.error(f"Entity extraction error: {e}")
-        entity_data = []
+        return []
 
-    # Sentiment analysis
-    st.header("💬 Sentiment Analysis")
+def sentiment_score(text):
     try:
-        blob = TextBlob(user_text)
-        polarity = blob.sentiment.polarity
-        sentiment_label = "Positive 😊" if polarity > 0 else "Negative 😠" if polarity < 0 else "Neutral 😐"
-        st.markdown(f"**Sentiment Score:** {polarity:.3f}")
-        st.markdown(f"**Interpretation:** {sentiment_label}")
-    except Exception as e:
-        st.error(f"Sentiment analysis error: {e}")
+        blob = TextBlob(text)
+        return blob.sentiment.polarity
+    except:
+        return 0
 
-    # Word Cloud Visualization
-    st.header("☁️ Entity Word Cloud")
-    try:
-        wc_text = " ".join([ent["label"] for ent in entity_data])
-        wordcloud = WordCloud(width=800, height=400, background_color='white').generate(wc_text)
-        fig, ax = plt.subplots()
-        ax.imshow(wordcloud, interpolation='bilinear')
-        ax.axis("off")
-        st.pyplot(fig, use_container_width=True)
-    except Exception as e:
-        st.error(f"Word cloud error: {e}")
+def visualize_bar_chart(labels, values, title, xlabel, ylabel):
+    fig, ax = plt.subplots()
+    ax.bar(labels, values, color='skyblue')
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    plt.xticks(rotation=45, ha='right')
+    st.pyplot(fig)
 
-    # Keyword to Entity Matching
-    if keyword_input:
-        st.header("🔗 Keyword-to-Entity Matching")
-        keywords = [kw.strip().lower() for kw in keyword_input.split(",") if kw.strip()]
-        matches = [ent for ent in entity_data if ent["label"].lower() in keywords]
-        if matches:
-            st.success("Entities matching target keywords:")
-            for ent in matches:
-                st.markdown(f"- 🎯 {ent['label']} ({ent['type']})")
+if api_token and user_text.strip() and analyze_btn:
+    datatxt = DataTXT(token=api_token, min_confidence=0.6)
+
+    # Section-wise analysis
+    st.header("📑 Section-wise Entity & Sentiment Analysis")
+    sections = split_sections(user_text)
+    section_entities = []
+    section_sentiments = []
+    entity_counts = []
+    for i, sec in enumerate(sections, 1):
+        ents = extract_entities(datatxt, sec)
+        section_entities.append(ents)
+        sentiment = sentiment_score(sec)
+        section_sentiments.append(sentiment)
+        entity_counts.append(len(ents))
+
+        st.subheader(f"Section {i}")
+        st.markdown(f"**Text:** {sec[:200]}{'...' if len(sec) > 200 else ''}")
+        st.markdown(f"**Sentiment Polarity:** {sentiment:.3f}")
+        if ents:
+            st.markdown("**Entities:**")
+            for ent in ents:
+                if ent["uri"]:
+                    st.markdown(f"- **[{ent['label']}]({ent['uri']})** ({ent['type']}) | Confidence: {ent['confidence']:.2f}")
+                else:
+                    st.markdown(f"- **{ent['label']}** ({ent['type']}) | Confidence: {ent['confidence']:.2f}")
         else:
-            st.info("No exact keyword matches found among extracted entities.")
+            st.info("No entities found in this section.")
+
+    # Visualize bar charts
+    st.header("📊 Visualizations")
+    visualize_bar_chart(
+        labels=[f"Section {i}" for i in range(1, len(sections)+1)],
+        values=entity_counts,
+        title="Entity Count per Section",
+        xlabel="Section",
+        ylabel="Entity Count"
+    )
+    visualize_bar_chart(
+        labels=[f"Section {i}" for i in range(1, len(sections)+1)],
+        values=section_sentiments,
+        title="Sentiment Polarity per Section",
+        xlabel="Section",
+        ylabel="Sentiment Polarity"
+    )
+
+    # Keyword-to-Entity matching
+    if keyword_input.strip():
+        st.header("🔑 Keyword-to-Entity Matching")
+        keywords = [kw.strip().lower() for kw in keyword_input.split(",") if kw.strip()]
+        all_entities = [ent for ents in section_entities for ent in ents]
+        entity_labels = {ent["label"].lower(): ent for ent in all_entities}
+        matched = []
+        unmatched = []
+
+        for kw in keywords:
+            if kw in entity_labels:
+                ent = entity_labels[kw]
+                matched.append(ent)
+            else:
+                unmatched.append(kw)
+
+        if matched:
+            st.success(f"✅ Matched Keywords to Entities ({len(matched)}):")
+            for ent in matched:
+                if ent["uri"]:
+                    st.markdown(f"- **[{ent['label']}]({ent['uri']})** ({ent['type']}) | Confidence: {ent['confidence']:.2f}")
+                else:
+                    st.markdown(f"- **{ent['label']}** ({ent['type']}) | Confidence: {ent['confidence']:.2f}")
+        if unmatched:
+            st.warning(f"❌ Keywords with no matching entity ({len(unmatched)}): {', '.join(unmatched)}")
 
     # Competitor comparison if provided
     if ref_text.strip():
         st.header("📎 Competitor Comparison")
-        try:
-            comp_result = datatxt.nex(ref_text, include="types,uri")
-            comp_entities = [
-                {
-                    "label": ann.label,
-                    "type": ann.types[0].split("/")[-1] if ann.types else "Thing",
-                    "uri": ann.uri if hasattr(ann, "uri") and ann.uri else None
-                }
-                for ann in comp_result.annotations
-            ]
-            user_labels = set([ent["label"].lower() for ent in entity_data])
-            comp_labels = set([ent["label"].lower() for ent in comp_entities])
+        comp_entities = extract_entities(datatxt, ref_text)
+        user_entity_labels = set([ent["label"].lower() for ent in [ent for ents in section_entities for ent in ents]])
+        comp_entity_labels = set([ent["label"].lower() for ent in comp_entities])
 
-            missing = comp_labels - user_labels
-            extra = user_labels - comp_labels
-            common = user_labels & comp_labels
+        missing = comp_entity_labels - user_entity_labels
+        extra = user_entity_labels - comp_entity_labels
+        common = user_entity_labels & comp_entity_labels
 
-            coverage_score = len(common) / len(comp_labels.union(user_labels)) if comp_labels.union(user_labels) else 0
+        coverage_score = len(common) / len(comp_entity_labels.union(user_entity_labels)) if comp_entity_labels.union(user_entity_labels) else 0
 
-            st.markdown(f"**Coverage Depth Score:** {coverage_score:.2%}")
-            st.progress(coverage_score)
+        st.markdown(f"**Coverage Depth Score:** {coverage_score:.2%}")
+        st.progress(coverage_score)
 
-            if missing:
-                st.warning("📌 Missing Entities from Your Content:")
-                for ent in comp_entities:
-                    if ent["label"].lower() in missing:
-                        line = f"- ❗ **{ent['label']}** ({ent['type']})"
-                        if ent['uri']:
-                            line += f" [🔗]({ent['uri']})"
-                        st.markdown(line)
+        if missing:
+            st.warning("📌 Missing Entities (in your content but found in competitor):")
+            for ent in comp_entities:
+                if ent["label"].lower() in missing:
+                    if ent["uri"]:
+                        st.markdown(f"- ❗ **[{ent['label']}]({ent['uri']})** ({ent['type']})")
+                    else:
+                        st.markdown(f"- ❗ **{ent['label']}** ({ent['type']})")
 
-            if extra:
-                st.info("🌿 Extra Entities in Your Content:")
-                for ent in entity_data:
+        if extra:
+            st.info("🌿 Extra Entities in Your Content (not in competitor):")
+            for ents in section_entities:
+                for ent in ents:
                     if ent["label"].lower() in extra:
-                        line = f"- ✅ **{ent['label']}** ({ent['type']})"
-                        if ent['uri']:
-                            line += f" [🔗]({ent['uri']})"
-                        st.markdown(line)
+                        if ent["uri"]:
+                            st.markdown(f"- ✅ **[{ent['label']}]({ent['uri']})** ({ent['type']})")
+                        else:
+                            st.markdown(f"- ✅ **{ent['label']}** ({ent['type']})")
 
-            if common:
-                st.success("🎯 Shared Entities:")
-                for ent in sorted(common):
-                    st.markdown(f"- 🔁 {ent}")
+        if common:
+            st.success("🎯 Shared Entities:")
+            for label in sorted(common):
+                st.markdown(f"- 🔁 {label}")
 
-        except Exception as e:
-            st.error(f"Competitor analysis error: {e}")
+    # JSON-LD schema markup generation for all entities found
+    all_unique_entities = {}
+    for ents in section_entities:
+        for ent in ents:
+            key = ent["label"].lower()
+            if key not in all_unique_entities or (ent["confidence"] and ent["confidence"] > all_unique_entities[key]["confidence"]):
+                all_unique_entities[key] = ent
 
-    # JSON-LD schema markup generation
-    if entity_data:
+    if all_unique_entities:
         st.header("🧾 Auto-Generated Entity Schema Markup (JSON-LD)")
         schema = {
             "@context": "https://schema.org",
@@ -143,7 +189,8 @@ if api_token and user_text.strip() and analyze_btn:
                     "@type": ent["type"],
                     "name": ent["label"],
                     **({"sameAs": ent["uri"]} if ent["uri"] else {})
-                } for ent in entity_data
+                }
+                for ent in all_unique_entities.values()
             ]
         }
         schema_str = json.dumps(schema, indent=2)
