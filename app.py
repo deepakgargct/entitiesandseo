@@ -8,7 +8,7 @@ from SPARQLWrapper import SPARQLWrapper, JSON
 import textstat
 
 st.set_page_config(page_title="SEO Entity & Sentiment Analyzer", layout="wide")
-st.title("🔍 SEO Entity & Sentiment Analyzer (Dandelion + TextBlob + DBpedia)")
+st.title("🔍 SEO Entity & Sentiment Analyzer (Dandelion + TextBlob)")
 
 # Input fields
 api_token = st.text_input("🔑 Enter your Dandelion API Token", type="password")
@@ -22,24 +22,27 @@ date_published = st.text_input("📅 Date Published (YYYY-MM-DD, optional)")
 description = st.text_area("📝 Short Description (optional)", height=100)
 analyze_btn = st.button("🚀 Analyze")
 
-def fetch_related_entities(entity_labels):
-    """
-    Given a list of entity labels, query DBpedia for related entities using SPARQL.
-    Returns a set of related entity labels to suggest missing entities.
-    """
+def fetch_related_entities_filtered(entity_labels):
     sparql = SPARQLWrapper("http://dbpedia.org/sparql")
     related_entities = set()
 
     for label in entity_labels:
-        query = f"""
+        query = f'''
         SELECT DISTINCT ?relatedLabel WHERE {{
           ?entity rdfs:label "{label}"@en .
           ?entity dbo:wikiPageWikiLink ?related .
           ?related rdfs:label ?relatedLabel .
+          ?related rdf:type ?type .
+          ?related dbo:wikiPageInLinkCount ?linkCount .
+          
           FILTER (lang(?relatedLabel) = 'en')
+          FILTER(?type IN (dbo:Person, dbo:Place, dbo:Organization, dbo:Event, dbo:Work))
+          FILTER(?linkCount > 50)
+          FILTER NOT EXISTS {{ ?related dbo:wikiPageDisambiguates ?any }}
+          FILTER (!regex(str(?related), "List_of"))
         }}
         LIMIT 10
-        """
+        '''
         sparql.setQuery(query)
         sparql.setReturnFormat(JSON)
         try:
@@ -49,7 +52,7 @@ def fetch_related_entities(entity_labels):
                 if related_label.lower() not in [l.lower() for l in entity_labels]:
                     related_entities.add(related_label)
         except Exception as e:
-            st.error(f"SPARQL query error for entity '{label}': {e}")
+            st.warning(f"SPARQL query error for entity '{label}': {e}")
     return related_entities
 
 if api_token and user_text.strip() and analyze_btn:
@@ -159,20 +162,6 @@ if api_token and user_text.strip() and analyze_btn:
         else:
             st.info("No exact keyword matches found among extracted entities.")
 
-    # Suggest missing related entities via DBpedia
-    st.header("💡 Suggested Missing Related Entities (DBpedia)")
-    try:
-        current_entity_labels = [ent["label"] for ent in entity_data]
-        related_entities = fetch_related_entities(current_entity_labels)
-        if related_entities:
-            st.markdown("These related entities are suggested to improve topic coverage and semantic depth:")
-            for rel_ent in sorted(related_entities):
-                st.markdown(f"- {rel_ent}")
-        else:
-            st.info("No related entities suggested. Your content covers key topics well!")
-    except Exception as e:
-        st.error(f"Error fetching related entities: {e}")
-
     # Competitor comparison if provided
     if ref_text.strip():
         st.header("📎 Competitor Comparison")
@@ -219,32 +208,27 @@ if api_token and user_text.strip() and analyze_btn:
             if common:
                 st.success("🎯 Shared Entities:")
                 for ent in sorted(common):
-                    st.markdown(f"- 🔁 {ent}")
-
+                    st.markdown(f"- {ent}")
         except Exception as e:
-            st.error(f"Competitor analysis error: {e}")
+            st.error(f"Competitor comparison error: {e}")
 
-    # Enhanced JSON-LD schema markup generation
+    # Suggested Missing Related Entities (DBpedia)
     if entity_data:
-        st.header("🧾 Auto-Generated Entity Schema Markup (JSON-LD)")
-        schema = {
-            "@context": "https://schema.org",
-            "@type": schema_type,
-            **({"author": {"@type": "Person", "name": author}} if author else {}),
-            **({"publisher": {"@type": "Organization", "name": publisher}} if publisher else {}),
-            **({"datePublished": date_published} if date_published else {}),
-            **({"description": description} if description else {}),
-            "mainEntity": [
-                {
-                    "@type": ent["type"],
-                    "name": ent["label"],
-                    **({"sameAs": ent["uri"]} if ent["uri"] else {})
-                } for ent in entity_data
-            ]
-        }
-        schema_str = json.dumps(schema, indent=2)
-        st.code(schema_str, language="json")
-        st.download_button("⬇️ Download Schema", schema_str, file_name="entity_schema.json", mime="application/json")
+        st.header("💡 Suggested Missing Related Entities (DBpedia)")
+
+        entity_labels = [ent["label"] for ent in entity_data]
+        related_entities = fetch_related_entities_filtered(entity_labels)
+        if related_entities:
+            st.markdown(
+                "Here are some related entities you might consider including to improve topic coverage:"
+            )
+            for ent in related_entities:
+                st.markdown(f"- {ent}")
+        else:
+            st.info("No relevant related entities found or all related entities are already covered.")
 
 else:
-    st.info("🔐 Enter your API key and content, then click Analyze.")
+    if not api_token:
+        st.info("Please enter your Dandelion API token to start analysis.")
+    elif not user_text.strip():
+        st.info("Please enter some content to analyze.")
